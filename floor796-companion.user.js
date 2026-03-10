@@ -1435,12 +1435,29 @@
     _slotFrames: null // WeakMap<slot, controlledFrame> for ALL duration-based render slots (null = not tracking)
   }
 
-  // ── Addon render frame control: prevent slot deletion during freeze ─────
-  // Addon render.js files (hologram-room, etc.) dispatch
-  // 'delete-slots-by-url-pattern' to cycle their movie slots after the
-  // internal frame counter expires.  We intercept in the capture phase so
-  // ALL addon render slots stay alive while we own frame control.
+  // ── Addon render frame control helpers ────────────────────────────────
+  // Only "always-running" duration-based slots should be controlled by
+  // the playback system.  Slots that have activateByEventName are
+  // EVENT-TRIGGERED (jaws19, naruto, cable, where-is-waldo, popcorn) —
+  // they start dormant (_activated=false) and only animate after user
+  // interaction.  We must leave them untouched.
   // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Returns true if a render slot is an "always-running" duration-based slot
+   * that should be controlled by our playback system.
+   * Excludes event-triggered slots (activateByEventName).
+   */
+  function isControllableSlot (s) {
+    return (
+      s._options?.duration > 0 &&
+      !s._options.activateByEventName // skip event-triggered slots
+    )
+  }
+
+  // Prevent slot deletion ONLY for controllable (always-running) slots
+  // while we own frame control.  Event-triggered slots can still clean
+  // themselves up normally.
   document.addEventListener(
     'delete-slots-by-url-pattern',
     e => {
@@ -1475,7 +1492,7 @@
     const m = getSceneMatrix()
     if (!m?._displayList) return
     for (const s of m._displayList) {
-      if (s._options?.duration > 0 && animState._slotFrames.has(s)) {
+      if (isControllableSlot(s) && animState._slotFrames.has(s)) {
         const sz = slotSafeZone(s._options.duration)
         animState._slotFrames.set(s, edge === 'first' ? sz.min : sz.max)
       }
@@ -1618,14 +1635,13 @@
     }
     animState.frozen = true
 
-    // Capture ALL duration-based render slots for full frame control.
-    // Each addon (hologram-room, etc.) may create vn slots with a duration;
-    // we track them independently so every separate render is controlled.
+    // Capture only always-running duration-based render slots for frame
+    // control.  Event-triggered slots (jaws19, naruto, etc.) are left alone.
     animState._slotFrames = new WeakMap()
     try {
       if (m._displayList) {
         for (const s of m._displayList) {
-          if (s._options?.duration > 0) {
+          if (isControllableSlot(s)) {
             const raw = s._internalFrameNo || 0
             const sz = slotSafeZone(s._options.duration)
             animState._slotFrames.set(
@@ -1754,12 +1770,13 @@
       } catch {
         /* */
       }
-      // Capture all duration-based addon render slots for frame control
+      // Capture only always-running duration-based addon render slots.
+      // Event-triggered slots (jaws19, naruto, etc.) are left alone.
       animState._slotFrames = new WeakMap()
       try {
         if (m._displayList) {
           for (const s of m._displayList) {
-            if (s._options?.duration > 0) {
+            if (isControllableSlot(s)) {
               const sz = slotSafeZone(s._options.duration)
               animState._slotFrames.set(
                 s,
@@ -1873,17 +1890,20 @@
       m._newFrameIsReady = false
       try {
         if (m._displayList?.length > 0) {
-          // ── Full addon render frame control ─────────────────────────
-          // ANY duration-based slot (hologram movies, or any addon that
-          // registers render slots with a duration) uses an internal frame
-          // counter that always increments.  During freeze mode we override
-          // _internalFrameNo per-slot so each addon render steps in lockstep
-          // with the playback system, clamped to its own safe zone.
-          // When holoDir=0 (jump/scrub), we hold every slot at its current
-          // controlled frame — prevents prepare() from advancing.
+          // ── Controllable addon render frame control ──────────────────
+          // Only "always-running" duration-based slots (hologram-room)
+          // are controlled.  Event-triggered slots (jaws19, naruto,
+          // quest-tuner-cable, where-is-waldo, etc.) are left alone so
+          // user interactions still work normally.
+          //
+          // IMPORTANT: prepare() reads _internalFrameNo then increments
+          // it, so we must pin BOTH before AND after the prepare() call.
+          // Before = so prepare() decodes the frame we want.
+          // After  = so render()'s prepareRenderSource sees the correct
+          //          _internalFrameNo (prepare left it at pin+1).
           if (animState.frozen && animState._slotFrames) {
             for (const s of m._displayList) {
-              if (s._options?.duration > 0) {
+              if (isControllableSlot(s)) {
                 const sz = slotSafeZone(s._options.duration)
                 // Initialise tracking from the slot if we haven't captured it
                 if (!animState._slotFrames.has(s)) {
@@ -1900,7 +1920,8 @@
                   else if (cf < sz.min) cf = sz.max
                   animState._slotFrames.set(s, cf)
                 }
-                // Always pin the slot to our controlled frame
+                // Pin BEFORE prepare: prepare() will read this as the
+                // frame to decode, then increment by 1.
                 s._internalFrameNo = cf
                 s._activated = true
               }
@@ -1909,11 +1930,14 @@
 
           await Promise.all(m._displayList.map(s => s.prepare(targetFrame)))
 
-          // Re-ensure duration-based slots stay activated (prepare() may
-          // deactivate them when _internalFrameNo exceeds the threshold)
+          // Re-pin AFTER prepare(): prepare() incremented _internalFrameNo
+          // by 1 and may have set _activated=false.  We restore both so
+          // render()'s prepareRenderSource callback sees the correct frame
+          // and the slot stays alive.
           if (animState.frozen && animState._slotFrames) {
             for (const s of m._displayList) {
-              if (s._options?.duration > 0) {
+              if (isControllableSlot(s) && animState._slotFrames.has(s)) {
+                s._internalFrameNo = animState._slotFrames.get(s)
                 s._activated = true
               }
             }
