@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Floor796 Companion
 // @namespace    https://github.com/floor796-companion
-// @version      6.2.0
+// @version      6.3.0
 // @description  Companion overlay for floor796.com — phonebook, navigation, hologram control, animation controller, quest helpers, map explorer. Community-built reference tool.
 // @match        https://floor796.com/*
 // @match        https://www.floor796.com/*
@@ -187,6 +187,41 @@
           }
           // ── Render JS ──
           else if (/\/interactive\/.*\.js/.test(urlPath)) {
+            // For interstellar, patch the source to expose setText/setTextSpeed
+            if (/interstellar/.test(urlPath)) {
+              return response.text().then(code => {
+                intercepted.renderJsLoaded.set(urlPath, {
+                  code,
+                  ts: Date.now()
+                })
+                // Patch const → let so they become mutable inside the closure
+                let patched = code
+                  .replace(/^const TEXT = /m, 'let TEXT = ')
+                  .replace(/^const TEXT_SPEED = /m, 'let TEXT_SPEED = ')
+                // Inject control methods onto the render function
+                patched +=
+                  '\n;if(typeof render==="function"){' +
+                  'render._ORIGINAL_TEXT=TEXT;' +
+                  'render._ORIGINAL_SPEED=TEXT_SPEED.slice();' +
+                  'render.getText=function(){return TEXT};' +
+                  'render.getTextSpeed=function(){return TEXT_SPEED};' +
+                  'render.setText=function(t){TEXT=t;textOffset=2};' +
+                  'render.setTextSpeed=function(s){TEXT_SPEED=s;nextLetterSpeedIndex=0};' +
+                  'render.resetCanvas=function(){cacheCanvas=null};' +
+                  'render.resetText=function(){TEXT=render._ORIGINAL_TEXT;textOffset=2};' +
+                  'render.resetSpeed=function(){TEXT_SPEED=render._ORIGINAL_SPEED.slice();nextLetterSpeedIndex=0};' +
+                  '}\n'
+                _hookBridge.log(
+                  `🎭 Render JS intercepted + patched: ${urlPath} (${code.length} → ${patched.length} chars)`
+                )
+                return new Response(patched, {
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers: response.headers
+                })
+              })
+            }
+            // All other render JS — clone & log only
             response
               .clone()
               .text()
@@ -1615,7 +1650,8 @@
     _lastStepTime: 0,
     _activeAudioSources: new Set(), // live BufferSourceNodes for speed sync
     _slotFrames: null, // WeakMap<slot, controlledFrame> for ALL duration-based render slots (null = not tracking)
-    _interstellarText: null // custom override for interstellar screen text (null = original)
+    _interstellarText: null, // custom override for interstellar screen text (null = original)
+    _interstellarSpeed: null // custom override for interstellar scroll speed (null = original)
   }
 
   // ── Addon render frame control helpers ────────────────────────────────
@@ -2365,115 +2401,63 @@
     log(`Render slots deleted matching: ${pattern}`)
   }
 
-  // ── Interstellar text override ──
-  // The interstellar addon (interactive_interstellar_render.js) displays
-  // scrolling text on a tiny canvas.  The TEXT constant lives in a closure
-  // we can't reach, so we replace the addon's _renderCallback with our own
-  // version that uses the custom text.  Pass null to restore the original.
-  let _interstellarOriginalRender = null
-  function patchInterstellarText (customText) {
+  // ── Interstellar screen helpers ──
+  // The fetch hook patches interactive_interstellar_render.js at load time,
+  // changing const TEXT/TEXT_SPEED → let and injecting .setText(), .setTextSpeed(),
+  // .getText(), .getTextSpeed(), .resetText(), .resetSpeed(), .resetCanvas()
+  // directly onto the render function.  These helpers just locate the addon and
+  // call those injected methods — zero reimplementation.
+
+  function getInterstellarAddon () {
     const m = getSceneMatrix()
-    if (!m) return
-    const addon = (m._addons || []).find(
-      a => a._url && /interstellar/.test(a._url)
-    )
-    if (!addon) return log('⚠ Interstellar addon not found')
+    if (!m) return null
+    return (m._addons || []).find(a => a._url && /interstellar/.test(a._url)) || null
+  }
 
-    // Save the original render callback on first patch
-    if (!_interstellarOriginalRender && addon._renderCallback) {
-      _interstellarOriginalRender = addon._renderCallback
+  function setInterstellarText (text) {
+    const addon = getInterstellarAddon()
+    if (!addon?._renderCallback?.setText) {
+      log('⚠ Interstellar addon not ready (setText unavailable)')
+      return false
     }
+    addon._renderCallback.setText(text)
+    log(`🌌 Interstellar text → "${text}"`)
+    return true
+  }
 
-    if (!customText) {
-      // Restore original
-      if (_interstellarOriginalRender) {
-        addon._renderCallback = _interstellarOriginalRender
-      }
-      return
+  function setInterstellarSpeed (speed) {
+    const addon = getInterstellarAddon()
+    if (!addon?._renderCallback?.setTextSpeed) {
+      log('⚠ Interstellar addon not ready (setTextSpeed unavailable)')
+      return false
     }
+    addon._renderCallback.setTextSpeed(speed)
+    log(`🌌 Interstellar speed → [${speed.join(',')}]`)
+    return true
+  }
 
-    // Build a replacement render function that uses our custom text
-    const TEXT = customText
-    const TEXT_SPEED = [7, 6, 9, 5, 7, 8, 6, 7, 5]
-    const CANVAS_WIDTH = 24
-    const CANVAS_HEIGHT = 36
-    const FONT_SIZE = 11
-    const FONT_FAMILIES = 'Courier New, Courier, monospace, "Lucida Console"'
-    const BG_COLOR = '#373737'
-    const TEXT_COLOR = '#adc7dc'
-    const TRANSFORM_MATRIX = [0.7, -0.4, 9, 0.559, 1, 3, 0, 0, 1]
-
-    let cacheCanvas = null
-    let cacheCtx = null
-    let internalFrames = 0
-    let nextLetterFrame = 0
-    let nextLetterSpeedIdx = 0
-    let textOffset = 2
-    let firstRender = true
-
-    function createCanvas () {
-      cacheCanvas = document.createElement('canvas')
-      cacheCanvas.width = CANVAS_WIDTH
-      cacheCanvas.height = CANVAS_HEIGHT
-      cacheCtx = cacheCanvas.getContext('2d')
-      cacheCtx.textBaseline = 'top'
-      cacheCtx.textAlign = 'right'
-      cacheCtx.font = `${FONT_SIZE}px ${FONT_FAMILIES}`
-      textOffset = 2
-      firstRender = true // let first draw happen immediately
-      internalFrames = 0
-      nextLetterSpeedIdx = 0
-      nextLetterFrame = 0
+  function resetInterstellar () {
+    const addon = getInterstellarAddon()
+    if (!addon?._renderCallback?.resetText) {
+      log('⚠ Interstellar addon not ready (reset unavailable)')
+      return false
     }
+    addon._renderCallback.resetText()
+    addon._renderCallback.resetSpeed()
+    log('🌌 Interstellar reset to original')
+    return true
+  }
 
-    function drawText () {
-      internalFrames++
-      if (nextLetterFrame === 0) nextLetterFrame = TEXT_SPEED[0]
-      if (!firstRender && internalFrames !== nextLetterFrame) return
-      firstRender = false
-      const t3 = TEXT + TEXT + TEXT
-      const text = t3.substring(
-        TEXT.length + textOffset - 4,
-        TEXT.length + textOffset
-      )
-      if (internalFrames === nextLetterFrame) {
-        textOffset = (textOffset + 1) % TEXT.length
-        nextLetterSpeedIdx = (nextLetterSpeedIdx + 1) % TEXT_SPEED.length
-        nextLetterFrame = internalFrames + TEXT_SPEED[nextLetterSpeedIdx]
-      }
-      cacheCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
-      cacheCtx.save()
-      cacheCtx.setTransform(
-        TRANSFORM_MATRIX[0],
-        TRANSFORM_MATRIX[3],
-        TRANSFORM_MATRIX[1],
-        TRANSFORM_MATRIX[4],
-        TRANSFORM_MATRIX[2],
-        TRANSFORM_MATRIX[5]
-      )
-      cacheCtx.fillStyle = BG_COLOR
-      cacheCtx.fillRect(0, 0, CANVAS_WIDTH, 11)
-      cacheCtx.globalCompositeOperation = 'source-atop'
-      cacheCtx.fillStyle = TEXT_COLOR
-      cacheCtx.fillText(text, 20, 0)
-      cacheCtx.restore()
+  function getInterstellarState () {
+    const addon = getInterstellarAddon()
+    const r = addon?._renderCallback
+    if (!r?.getText) return null
+    return {
+      text: r.getText(),
+      speed: r.getTextSpeed(),
+      originalText: r._ORIGINAL_TEXT,
+      originalSpeed: r._ORIGINAL_SPEED
     }
-
-    addon._renderCallback = function (renderCtx, frame, scale, isHighDpr) {
-      if (!cacheCanvas) createCanvas()
-      drawText()
-      renderCtx.save()
-      renderCtx.drawImage(
-        cacheCanvas,
-        0,
-        0,
-        Math.ceil(cacheCanvas.width * (isHighDpr ? 2 : 1) * scale),
-        Math.ceil(cacheCanvas.height * (isHighDpr ? 2 : 1) * scale)
-      )
-      renderCtx.restore()
-    }
-
-    log(`🌌 Interstellar render patched with: "${customText}"`)
   }
 
   // ── Cache API (front.js: caches.open('f796')) ──
@@ -5568,18 +5552,42 @@
       `<button class="f796-btn f796-scene-evt" data-evt="popcorn" title="Popcorn memorial animation">🍿 Popcorn</button>` +
       `</div>` +
       `<div id="f796-holo-evt-out" style="font-size:10px;min-height:14px"></div>` +
-      // ─── INTERSTELLAR TEXT ───
-      `<div class="f796-section">🌌 Interstellar Screen Text</div>` +
+      // ─── INTERSTELLAR CONTROL ───
+      `<div class="f796-section">🌌 Interstellar Screen Control</div>` +
       `<div style="font-size:10px;color:#4a5568;margin-bottom:6px">` +
-      `Override the scrolling text on the Interstellar screen (original: "MURPH DELETE MY BROWSER HISTORY").` +
+      `Change the scrolling text and scroll speed on the Interstellar screen.` +
       `</div>` +
+      // Text row
+      `<div style="font-size:10px;color:#8ba3b8;margin-bottom:2px">✏️ Text</div>` +
       `<div style="display:flex;gap:4px;margin-bottom:6px">` +
       `<input class="f796-input" id="f796-interstellar-text" placeholder="Custom text…" value="${escHtml(
         animState._interstellarText || ''
       )}" style="flex:1;font-size:10px"/>` +
       `<button class="f796-btn" id="f796-interstellar-set" style="font-size:9px;padding:3px 8px">✏️ Set</button>` +
-      `<button class="f796-btn" id="f796-interstellar-reset" style="font-size:9px;padding:3px 8px">↩ Reset</button>` +
+      `<button class="f796-btn" id="f796-interstellar-reset-text" style="font-size:9px;padding:3px 8px">↩ Reset</button>` +
       `</div>` +
+      // Speed row
+      `<div style="font-size:10px;color:#8ba3b8;margin-bottom:2px">⏱ Scroll Speed <span style="color:#4a5568">(comma-separated frame delays)</span></div>` +
+      `<div style="display:flex;gap:4px;margin-bottom:4px">` +
+      `<input class="f796-input" id="f796-interstellar-speed" placeholder="e.g. 7,6,9,5,7,8,6,7,5" value="${escHtml(
+        animState._interstellarSpeed ? animState._interstellarSpeed.join(',') : ''
+      )}" style="flex:1;font-size:10px"/>` +
+      `<button class="f796-btn" id="f796-interstellar-set-speed" style="font-size:9px;padding:3px 8px">⏱ Set</button>` +
+      `<button class="f796-btn" id="f796-interstellar-reset-speed" style="font-size:9px;padding:3px 8px">↩ Reset</button>` +
+      `</div>` +
+      // Speed presets
+      `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">` +
+      `<span style="font-size:10px;color:#8ba3b8;line-height:22px">Presets:</span>` +
+      `<button class="f796-btn f796-speed-preset" data-speeds="15,14,18,12,15,16,14,15,12" style="font-size:9px;padding:2px 6px">🐢 Slow</button>` +
+      `<button class="f796-btn f796-speed-preset" data-speeds="7,6,9,5,7,8,6,7,5" style="font-size:9px;padding:2px 6px">▶ Default</button>` +
+      `<button class="f796-btn f796-speed-preset" data-speeds="3,3,4,2,3,4,3,3,2" style="font-size:9px;padding:2px 6px">⚡ Fast</button>` +
+      `<button class="f796-btn f796-speed-preset" data-speeds="1,1,1,1,1,1,1,1,1" style="font-size:9px;padding:2px 6px">💨 Instant</button>` +
+      `</div>` +
+      // Full reset
+      `<div style="margin-bottom:6px">` +
+      `<button class="f796-btn" id="f796-interstellar-reset-all" style="font-size:9px;padding:3px 10px">↩ Reset All to Original</button>` +
+      `</div>` +
+      // Status / output
       `<div id="f796-interstellar-out" style="font-size:10px;min-height:14px"></div>` +
       // ─── NAVIGATE ───
       `<div style="margin-top:8px">` +
@@ -5680,33 +5688,111 @@
       })
     )
 
-    // Interstellar text override
+    // Interstellar screen controls
+    const interOut = el.querySelector('#f796-interstellar-out')
+    const interTextInput = el.querySelector('#f796-interstellar-text')
+    const interSpeedInput = el.querySelector('#f796-interstellar-speed')
+
+    // Show current live state on tab open
+    const iState = getInterstellarState()
+    if (iState) {
+      interOut.innerHTML =
+        `<span style="color:#4a5568">Live: "${escHtml(iState.text.trim())}" · speed=[${iState.speed.join(',')}]</span>`
+    }
+
+    // Set text
     el.querySelector('#f796-interstellar-set').addEventListener('click', () => {
-      const text = el.querySelector('#f796-interstellar-text').value.trim()
-      const out = el.querySelector('#f796-interstellar-out')
+      const text = interTextInput.value.trim()
       if (!text) {
-        out.innerHTML =
-          '<span style="color:#ff6b6b">Enter some text first</span>'
+        interOut.innerHTML = '<span style="color:#ff6b6b">Enter some text first</span>'
         return
       }
-      animState._interstellarText = text + ' '
-      patchInterstellarText(text + ' ')
-      out.innerHTML = `<span style="color:#6bcb77">✏️ Text set: "${escHtml(
-        text
-      )}"</span>`
-      log(`🌌 Interstellar text overridden: "${text}"`)
-    })
-    el.querySelector('#f796-interstellar-reset').addEventListener(
-      'click',
-      () => {
-        const out = el.querySelector('#f796-interstellar-out')
-        animState._interstellarText = null
-        patchInterstellarText(null)
-        el.querySelector('#f796-interstellar-text').value = ''
-        out.innerHTML = '<span style="color:#6bcb77">↩ Reset to original</span>'
-        log('🌌 Interstellar text reset to original')
+      const withSpace = text + ' '
+      if (setInterstellarText(withSpace)) {
+        animState._interstellarText = withSpace
+        interOut.innerHTML = `<span style="color:#6bcb77">✏️ Text set: "${escHtml(text)}"</span>`
+      } else {
+        interOut.innerHTML = '<span style="color:#ff6b6b">⚠ Addon not ready — navigate to the Interstellar screen first</span>'
       }
+    })
+
+    // Reset text
+    el.querySelector('#f796-interstellar-reset-text').addEventListener('click', () => {
+      const addon = getInterstellarAddon()
+      if (addon?._renderCallback?.resetText) {
+        addon._renderCallback.resetText()
+        animState._interstellarText = null
+        interTextInput.value = ''
+        const s = getInterstellarState()
+        interOut.innerHTML = `<span style="color:#6bcb77">↩ Text reset: "${escHtml((s?.text || '').trim())}"</span>`
+        log('🌌 Interstellar text reset')
+      } else {
+        interOut.innerHTML = '<span style="color:#ff6b6b">⚠ Addon not ready</span>'
+      }
+    })
+
+    // Set speed
+    el.querySelector('#f796-interstellar-set-speed').addEventListener('click', () => {
+      const raw = interSpeedInput.value.trim()
+      if (!raw) {
+        interOut.innerHTML = '<span style="color:#ff6b6b">Enter speeds (e.g. 7,6,9,5,7,8,6,7,5)</span>'
+        return
+      }
+      const nums = raw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => n > 0 && !isNaN(n))
+      if (nums.length === 0) {
+        interOut.innerHTML = '<span style="color:#ff6b6b">Invalid speed values</span>'
+        return
+      }
+      if (setInterstellarSpeed(nums)) {
+        animState._interstellarSpeed = nums
+        interOut.innerHTML = `<span style="color:#6bcb77">⏱ Speed set: [${nums.join(',')}]</span>`
+      } else {
+        interOut.innerHTML = '<span style="color:#ff6b6b">⚠ Addon not ready</span>'
+      }
+    })
+
+    // Reset speed
+    el.querySelector('#f796-interstellar-reset-speed').addEventListener('click', () => {
+      const addon = getInterstellarAddon()
+      if (addon?._renderCallback?.resetSpeed) {
+        addon._renderCallback.resetSpeed()
+        animState._interstellarSpeed = null
+        interSpeedInput.value = ''
+        const s = getInterstellarState()
+        interOut.innerHTML = `<span style="color:#6bcb77">↩ Speed reset: [${(s?.speed || []).join(',')}]</span>`
+        log('🌌 Interstellar speed reset')
+      } else {
+        interOut.innerHTML = '<span style="color:#ff6b6b">⚠ Addon not ready</span>'
+      }
+    })
+
+    // Speed presets
+    el.querySelectorAll('.f796-speed-preset').forEach(btn =>
+      btn.addEventListener('click', () => {
+        const nums = btn.dataset.speeds.split(',').map(Number)
+        if (setInterstellarSpeed(nums)) {
+          animState._interstellarSpeed = nums
+          interSpeedInput.value = nums.join(',')
+          interOut.innerHTML = `<span style="color:#6bcb77">⏱ Preset applied: [${nums.join(',')}]</span>`
+        } else {
+          interOut.innerHTML = '<span style="color:#ff6b6b">⚠ Addon not ready</span>'
+        }
+      })
     )
+
+    // Reset all
+    el.querySelector('#f796-interstellar-reset-all').addEventListener('click', () => {
+      if (resetInterstellar()) {
+        animState._interstellarText = null
+        animState._interstellarSpeed = null
+        interTextInput.value = ''
+        interSpeedInput.value = ''
+        const s = getInterstellarState()
+        interOut.innerHTML = `<span style="color:#6bcb77">↩ All reset — text: "${escHtml((s?.text || '').trim())}" · speed: [${(s?.speed || []).join(',')}]</span>`
+      } else {
+        interOut.innerHTML = '<span style="color:#ff6b6b">⚠ Addon not ready</span>'
+      }
+    })
 
     // Teleport to hologram room
     el.querySelector('#f796-holo-goto').addEventListener('click', () => {
