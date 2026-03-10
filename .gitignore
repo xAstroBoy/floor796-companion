@@ -1,0 +1,36 @@
+# ─── Build / dev artifacts ───
+node_modules/
+*.log
+*.tmp
+
+# ─── Local research & extraction (not part of the userscript) ───
+Extract/
+floor796_dump/
+Offline Version/
+offline_extracted/
+
+# ─── Research scripts & data ───
+find_endpoints.py
+find_quest_endpoints.py
+floor796_bruteforce_v1.py
+floor796_bruteforce.py
+floor796_ripper.py
+phone_blitz.py
+phone_hunt.py
+phone_hunt2.py
+phone_scanner.py
+phone_search.py
+unpack_offline.py
+
+# ─── Research output data ───
+bruteforce_results.json
+phone_hits.jsonl
+phone_results.json
+phone_tested.bin
+changelog_live.json
+ANALYSIS_REPORT.md
+
+# ─── OS files ───
+Thumbs.db
+.DS_Store
+desktop.ini
