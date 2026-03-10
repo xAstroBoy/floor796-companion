@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Floor796 Companion
 // @namespace    https://github.com/floor796-companion
-// @version      6.1.0
+// @version      6.2.0
 // @description  Companion overlay for floor796.com — phonebook, navigation, hologram control, animation controller, quest helpers, map explorer. Community-built reference tool.
 // @match        https://floor796.com/*
 // @match        https://www.floor796.com/*
@@ -1614,7 +1614,8 @@
     _fpsTracker: [], // track custom FPS
     _lastStepTime: 0,
     _activeAudioSources: new Set(), // live BufferSourceNodes for speed sync
-    _slotFrames: null // WeakMap<slot, controlledFrame> for ALL duration-based render slots (null = not tracking)
+    _slotFrames: null, // WeakMap<slot, controlledFrame> for ALL duration-based render slots (null = not tracking)
+    _interstellarText: null // custom override for interstellar screen text (null = original)
   }
 
   // ── Addon render frame control helpers ────────────────────────────────
@@ -1981,18 +1982,17 @@
 
       switch (animState.mode) {
         case 'bounce': {
-          // Ping-pong between 0 and 59 (or range bounds in future)
+          // Ping-pong between frame 0 and 59 — hit the boundary, STAY
+          // on the edge frame, then reverse next tick (no skip).
           next = cur + animState.bounceDir
           holoDir = animState.bounceDir
           if (next > 59) {
+            next = 59 // clamp to last frame
             animState.bounceDir = -1
-            next = cur - 1 // reverse immediately
-            if (next < 0) next = 0
             holoDir = -1
           } else if (next < 0) {
+            next = 0 // clamp to first frame
             animState.bounceDir = 1
-            next = cur + 1 // reverse immediately
-            if (next > 59) next = 59
             holoDir = 1
           }
           break
@@ -2363,6 +2363,117 @@
       })
     )
     log(`Render slots deleted matching: ${pattern}`)
+  }
+
+  // ── Interstellar text override ──
+  // The interstellar addon (interactive_interstellar_render.js) displays
+  // scrolling text on a tiny canvas.  The TEXT constant lives in a closure
+  // we can't reach, so we replace the addon's _renderCallback with our own
+  // version that uses the custom text.  Pass null to restore the original.
+  let _interstellarOriginalRender = null
+  function patchInterstellarText (customText) {
+    const m = getSceneMatrix()
+    if (!m) return
+    const addon = (m._addons || []).find(
+      a => a._url && /interstellar/.test(a._url)
+    )
+    if (!addon) return log('⚠ Interstellar addon not found')
+
+    // Save the original render callback on first patch
+    if (!_interstellarOriginalRender && addon._renderCallback) {
+      _interstellarOriginalRender = addon._renderCallback
+    }
+
+    if (!customText) {
+      // Restore original
+      if (_interstellarOriginalRender) {
+        addon._renderCallback = _interstellarOriginalRender
+      }
+      return
+    }
+
+    // Build a replacement render function that uses our custom text
+    const TEXT = customText
+    const TEXT_SPEED = [7, 6, 9, 5, 7, 8, 6, 7, 5]
+    const CANVAS_WIDTH = 24
+    const CANVAS_HEIGHT = 36
+    const FONT_SIZE = 11
+    const FONT_FAMILIES = 'Courier New, Courier, monospace, "Lucida Console"'
+    const BG_COLOR = '#373737'
+    const TEXT_COLOR = '#adc7dc'
+    const TRANSFORM_MATRIX = [0.7, -0.4, 9, 0.559, 1, 3, 0, 0, 1]
+
+    let cacheCanvas = null
+    let cacheCtx = null
+    let internalFrames = 0
+    let nextLetterFrame = 0
+    let nextLetterSpeedIdx = 0
+    let textOffset = 2
+    let firstRender = true
+
+    function createCanvas () {
+      cacheCanvas = document.createElement('canvas')
+      cacheCanvas.width = CANVAS_WIDTH
+      cacheCanvas.height = CANVAS_HEIGHT
+      cacheCtx = cacheCanvas.getContext('2d')
+      cacheCtx.textBaseline = 'top'
+      cacheCtx.textAlign = 'right'
+      cacheCtx.font = `${FONT_SIZE}px ${FONT_FAMILIES}`
+      textOffset = 2
+      firstRender = true // let first draw happen immediately
+      internalFrames = 0
+      nextLetterSpeedIdx = 0
+      nextLetterFrame = 0
+    }
+
+    function drawText () {
+      internalFrames++
+      if (nextLetterFrame === 0) nextLetterFrame = TEXT_SPEED[0]
+      if (!firstRender && internalFrames !== nextLetterFrame) return
+      firstRender = false
+      const t3 = TEXT + TEXT + TEXT
+      const text = t3.substring(
+        TEXT.length + textOffset - 4,
+        TEXT.length + textOffset
+      )
+      if (internalFrames === nextLetterFrame) {
+        textOffset = (textOffset + 1) % TEXT.length
+        nextLetterSpeedIdx = (nextLetterSpeedIdx + 1) % TEXT_SPEED.length
+        nextLetterFrame = internalFrames + TEXT_SPEED[nextLetterSpeedIdx]
+      }
+      cacheCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
+      cacheCtx.save()
+      cacheCtx.setTransform(
+        TRANSFORM_MATRIX[0],
+        TRANSFORM_MATRIX[3],
+        TRANSFORM_MATRIX[1],
+        TRANSFORM_MATRIX[4],
+        TRANSFORM_MATRIX[2],
+        TRANSFORM_MATRIX[5]
+      )
+      cacheCtx.fillStyle = BG_COLOR
+      cacheCtx.fillRect(0, 0, CANVAS_WIDTH, 11)
+      cacheCtx.globalCompositeOperation = 'source-atop'
+      cacheCtx.fillStyle = TEXT_COLOR
+      cacheCtx.fillText(text, 20, 0)
+      cacheCtx.restore()
+    }
+
+    addon._renderCallback = function (renderCtx, frame, scale, isHighDpr) {
+      if (!cacheCanvas) createCanvas()
+      drawText()
+      renderCtx.save()
+      renderCtx.drawImage(
+        cacheCanvas,
+        0,
+        0,
+        Math.ceil(cacheCanvas.width * (isHighDpr ? 2 : 1) * scale),
+        Math.ceil(cacheCanvas.height * (isHighDpr ? 2 : 1) * scale)
+      )
+      renderCtx.restore()
+    }
+
+    log(`🌌 Interstellar render patched with: "${customText}"`)
   }
 
   // ── Cache API (front.js: caches.open('f796')) ──
@@ -5376,14 +5487,14 @@
     { id: 3, title: 'The Matrix', year: 1999, available: true },
     { id: 4, title: 'Saw', year: 2004, available: true },
     { id: 5, title: 'Hackers', year: 1995, available: true },
-    { id: 6, title: '(placeholder 404)', year: 0, available: false },
-    { id: 7, title: '(placeholder 404)', year: 0, available: false },
-    { id: 8, title: '(placeholder 404)', year: 0, available: false },
-    { id: 9, title: '(placeholder 404)', year: 0, available: false },
-    { id: 10, title: '(placeholder 404)', year: 0, available: false },
-    { id: 11, title: '(placeholder 404)', year: 0, available: false },
-    { id: 12, title: '(placeholder 404)', year: 0, available: false },
-    { id: 13, title: '(placeholder 404)', year: 0, available: false }
+    { id: 6, title: '404 — No Hologram', year: 0, available: true },
+    { id: 7, title: '404 — No Hologram', year: 0, available: true },
+    { id: 8, title: '404 — No Hologram', year: 0, available: true },
+    { id: 9, title: '404 — No Hologram', year: 0, available: true },
+    { id: 10, title: '404 — No Hologram', year: 0, available: true },
+    { id: 11, title: '404 — No Hologram', year: 0, available: true },
+    { id: 12, title: '404 — No Hologram', year: 0, available: true },
+    { id: 13, title: '404 — No Hologram', year: 0, available: true }
   ]
 
   function renderHologramTab (el) {
@@ -5452,8 +5563,24 @@
       `<div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:6px">` +
       `<button class="f796-btn f796-scene-evt" data-evt="naruto" title="Shadow Clone Jutsu animation">🍥 Naruto</button>` +
       `<button class="f796-btn f796-scene-evt" data-evt="jaws19" title="Shark animation from BttF2">🦈 Jaws 19</button>` +
+      `<button class="f796-btn f796-scene-evt" data-evt="cable" title="Quest-tuner cable pull animation">🔌 Cable</button>` +
+      `<button class="f796-btn f796-scene-evt" data-evt="where-is-waldo" title="Where is Waldo? animation">🔍 Waldo</button>` +
+      `<button class="f796-btn f796-scene-evt" data-evt="popcorn" title="Popcorn memorial animation">🍿 Popcorn</button>` +
       `</div>` +
       `<div id="f796-holo-evt-out" style="font-size:10px;min-height:14px"></div>` +
+      // ─── INTERSTELLAR TEXT ───
+      `<div class="f796-section">🌌 Interstellar Screen Text</div>` +
+      `<div style="font-size:10px;color:#4a5568;margin-bottom:6px">` +
+      `Override the scrolling text on the Interstellar screen (original: "MURPH DELETE MY BROWSER HISTORY").` +
+      `</div>` +
+      `<div style="display:flex;gap:4px;margin-bottom:6px">` +
+      `<input class="f796-input" id="f796-interstellar-text" placeholder="Custom text…" value="${escHtml(
+        animState._interstellarText || ''
+      )}" style="flex:1;font-size:10px"/>` +
+      `<button class="f796-btn" id="f796-interstellar-set" style="font-size:9px;padding:3px 8px">✏️ Set</button>` +
+      `<button class="f796-btn" id="f796-interstellar-reset" style="font-size:9px;padding:3px 8px">↩ Reset</button>` +
+      `</div>` +
+      `<div id="f796-interstellar-out" style="font-size:10px;min-height:14px"></div>` +
       // ─── NAVIGATE ───
       `<div style="margin-top:8px">` +
       `<button class="f796-btn" id="f796-holo-goto">🗺️ Teleport to Hologram Room</button>` +
@@ -5551,6 +5678,34 @@
         )}</span>`
         log(`⚡ Scene event dispatched: ${evt}`)
       })
+    )
+
+    // Interstellar text override
+    el.querySelector('#f796-interstellar-set').addEventListener('click', () => {
+      const text = el.querySelector('#f796-interstellar-text').value.trim()
+      const out = el.querySelector('#f796-interstellar-out')
+      if (!text) {
+        out.innerHTML =
+          '<span style="color:#ff6b6b">Enter some text first</span>'
+        return
+      }
+      animState._interstellarText = text + ' '
+      patchInterstellarText(text + ' ')
+      out.innerHTML = `<span style="color:#6bcb77">✏️ Text set: "${escHtml(
+        text
+      )}"</span>`
+      log(`🌌 Interstellar text overridden: "${text}"`)
+    })
+    el.querySelector('#f796-interstellar-reset').addEventListener(
+      'click',
+      () => {
+        const out = el.querySelector('#f796-interstellar-out')
+        animState._interstellarText = null
+        patchInterstellarText(null)
+        el.querySelector('#f796-interstellar-text').value = ''
+        out.innerHTML = '<span style="color:#6bcb77">↩ Reset to original</span>'
+        log('🌌 Interstellar text reset to original')
+      }
     )
 
     // Teleport to hologram room
