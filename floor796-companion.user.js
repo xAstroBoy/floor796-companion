@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Floor796 Companion
 // @namespace    https://github.com/floor796-companion
-// @version      6.0.0
+// @version      6.1.0
 // @description  Companion overlay for floor796.com — phonebook, navigation, hologram control, animation controller, quest helpers, map explorer. Community-built reference tool.
 // @match        https://floor796.com/*
 // @match        https://www.floor796.com/*
@@ -11,6 +11,8 @@
 // @grant        GM_xmlhttpRequest
 // @connect      floor796.com
 // @connect      static.floor796.com
+// @updateURL    https://raw.githubusercontent.com/xAstroBoy/floor796-companion/master/floor796-companion.user.js
+// @downloadURL  https://raw.githubusercontent.com/xAstroBoy/floor796-companion/master/floor796-companion.user.js
 // @run-at       document-start
 // ==/UserScript==
 
@@ -720,43 +722,223 @@
   // ── Phonebook — all known valid payphone numbers (community-discovered) ──
   // Sorted by number (numeric ascending) · 37 numbers from full 0000000–9999999 bruteforce
   const PHONEBOOK = [
-    { number: '0014015', file: 'mgs.mp3', name: 'Metal Gear Solid', ref: 'Codec call frequency' },
-    { number: '0119116', file: '5th-elem-v3.mp3', name: 'The Fifth Element', ref: 'Multipass scene' },
-    { number: '0881987', file: 'fnaf0.mp3', name: "Five Nights at Freddy's", ref: 'Freddy Fazbear' },
-    { number: '1031111', file: 'silent-hill.mp3', name: 'Silent Hill', ref: 'Radio static' },
-    { number: '1115791', file: 'xnaj28s6fa9d2sma.mp3', name: '??? (Secret)', ref: 'Hidden easter egg' },
-    { number: '1115792', file: 'ill-be-back.mp3', name: "I'll Be Back", ref: 'Terminator' },
-    { number: '1483369', file: 'jesse-pinkman.mp3', name: 'Jesse Pinkman', ref: 'Breaking Bad' },
-    { number: '1800613', file: 'god-of-war.mp3', name: 'God of War', ref: 'Kratos theme' },
-    { number: '2020327', file: 'biosystem.mp3', name: 'Biosystem', ref: 'Sci-fi ambience' },
-    { number: '2128506', file: 'akvarium.mp3', name: 'Aquarium', ref: 'Akvarium (Russian band)' },
-    { number: '2222222', file: 'de-la-soul.mp3', name: 'De La Soul', ref: 'Ring Ring Ring' },
-    { number: '2232232', file: 'karlson.mp3', name: 'Karlson', ref: 'Karlsson-on-the-Roof' },
-    { number: '2731977', file: 'mimino.mp3', name: 'Mimino', ref: 'Soviet comedy film (1977)' },
-    { number: '2741001', file: 'master-dent.mp3', name: 'Arthur Dent', ref: "Hitchhiker's Guide" },
-    { number: '2870010', file: 'lyolik.mp3', name: 'Lyolik', ref: 'Nu, Pogodi! cartoon' },
-    { number: '4002892', file: 'funk-do-yudi.mp3', name: 'Funk do Yudi', ref: 'Brazilian funk' },
-    { number: '4125518', file: 'the-ring.mp3', name: 'The Ring', ref: "Samara's phone call" },
-    { number: '4452675', file: 'foster-parents.mp3', name: 'Foster Parents', ref: "Foster's Home" },
-    { number: '4546021', file: 'ironiya-sudby.mp3', name: 'Irony of Fate', ref: 'Soviet New Year classic' },
+    {
+      number: '0014015',
+      file: 'mgs.mp3',
+      name: 'Metal Gear Solid',
+      ref: 'Codec call frequency'
+    },
+    {
+      number: '0119116',
+      file: '5th-elem-v3.mp3',
+      name: 'The Fifth Element',
+      ref: 'Multipass scene'
+    },
+    {
+      number: '0881987',
+      file: 'fnaf0.mp3',
+      name: "Five Nights at Freddy's",
+      ref: 'Freddy Fazbear'
+    },
+    {
+      number: '1031111',
+      file: 'silent-hill.mp3',
+      name: 'Silent Hill',
+      ref: 'Radio static'
+    },
+    {
+      number: '1115791',
+      file: 'xnaj28s6fa9d2sma.mp3',
+      name: '??? (Secret)',
+      ref: 'Hidden easter egg'
+    },
+    {
+      number: '1115792',
+      file: 'ill-be-back.mp3',
+      name: "I'll Be Back",
+      ref: 'Terminator'
+    },
+    {
+      number: '1483369',
+      file: 'jesse-pinkman.mp3',
+      name: 'Jesse Pinkman',
+      ref: 'Breaking Bad'
+    },
+    {
+      number: '1800613',
+      file: 'god-of-war.mp3',
+      name: 'God of War',
+      ref: 'Kratos theme'
+    },
+    {
+      number: '2020327',
+      file: 'biosystem.mp3',
+      name: 'Biosystem',
+      ref: 'Sci-fi ambience'
+    },
+    {
+      number: '2128506',
+      file: 'akvarium.mp3',
+      name: 'Aquarium',
+      ref: 'Akvarium (Russian band)'
+    },
+    {
+      number: '2222222',
+      file: 'de-la-soul.mp3',
+      name: 'De La Soul',
+      ref: 'Ring Ring Ring'
+    },
+    {
+      number: '2232232',
+      file: 'karlson.mp3',
+      name: 'Karlson',
+      ref: 'Karlsson-on-the-Roof'
+    },
+    {
+      number: '2731977',
+      file: 'mimino.mp3',
+      name: 'Mimino',
+      ref: 'Soviet comedy film (1977)'
+    },
+    {
+      number: '2741001',
+      file: 'master-dent.mp3',
+      name: 'Arthur Dent',
+      ref: "Hitchhiker's Guide"
+    },
+    {
+      number: '2870010',
+      file: 'lyolik.mp3',
+      name: 'Lyolik',
+      ref: 'Nu, Pogodi! cartoon'
+    },
+    {
+      number: '4002892',
+      file: 'funk-do-yudi.mp3',
+      name: 'Funk do Yudi',
+      ref: 'Brazilian funk'
+    },
+    {
+      number: '4125518',
+      file: 'the-ring.mp3',
+      name: 'The Ring',
+      ref: "Samara's phone call"
+    },
+    {
+      number: '4452675',
+      file: 'foster-parents.mp3',
+      name: 'Foster Parents',
+      ref: "Foster's Home"
+    },
+    {
+      number: '4546021',
+      file: 'ironiya-sudby.mp3',
+      name: 'Irony of Fate',
+      ref: 'Soviet New Year classic'
+    },
     { number: '4674355', file: 'imp.mp3', name: 'Imp', ref: 'Doom demon' },
-    { number: '5193708', file: 'hotline-miami.mp3', name: 'Hotline Miami', ref: 'Do you like hurting other people?' },
-    { number: '5550123', file: 'bruce-almighty.mp3', name: 'Bruce Almighty', ref: 'Bruce Almighty (2003)' },
-    { number: '5550182', file: 'gta.mp3', name: 'GTA', ref: 'Grand Theft Auto' },
-    { number: '5550690', file: 'neo.mp3', name: 'Neo', ref: 'The Matrix — Wake Up, Neo' },
-    { number: '5552368', file: 'ghostbusters.mp3', name: 'Ghostbusters', ref: 'Who ya gonna call? (1984)' },
-    { number: '5553535', file: 'home-money.mp3', name: 'Home Money', ref: 'Home finance jingle' },
-    { number: '5558383', file: 'seinfeld.mp3', name: 'Seinfeld', ref: 'Seinfeld theme' },
-    { number: '6138840', file: 'god-of-war.mp3', name: 'God of War (alt)', ref: 'Kratos theme (alternate number)' },
-    { number: '6330171', file: 'galochka.mp3', name: 'Galochka', ref: 'Ivan Vasilievich (Soviet comedy)' },
-    { number: '6647665', file: 'scott-pilgrim.mp3', name: 'Scott Pilgrim', ref: 'Scott Pilgrim vs. the World' },
-    { number: '7334141', file: 'if-you-are-homeless.mp3', name: 'If You Are Homeless', ref: 'Just buy a house meme' },
-    { number: '7861410', file: 'black-meza.mp3', name: 'Black Mesa', ref: 'Half-Life — Black Mesa Research Facility' },
-    { number: '8600100', file: '8600100.mp3', name: '??? (8600100)', ref: 'Unknown easter egg' },
-    { number: '8675309', file: 'jenny.mp3', name: 'Jenny (867-5309)', ref: 'Tommy Tutone' },
-    { number: '8872061', file: 'wazzap.mp3', name: 'Wazzup!', ref: 'Scary Movie / Budweiser ad' },
-    { number: '9211040', file: 'camptain-pronin.mp3', name: 'Captain Pronin', ref: 'Russian cartoon superhero' },
-    { number: '9631963', file: 'peppa-pig.mp3', name: 'Peppa Pig', ref: 'Peppa Pig theme' }
+    {
+      number: '5193708',
+      file: 'hotline-miami.mp3',
+      name: 'Hotline Miami',
+      ref: 'Do you like hurting other people?'
+    },
+    {
+      number: '5550123',
+      file: 'bruce-almighty.mp3',
+      name: 'Bruce Almighty',
+      ref: 'Bruce Almighty (2003)'
+    },
+    {
+      number: '5550182',
+      file: 'gta.mp3',
+      name: 'GTA',
+      ref: 'Grand Theft Auto'
+    },
+    {
+      number: '5550690',
+      file: 'neo.mp3',
+      name: 'Neo',
+      ref: 'The Matrix — Wake Up, Neo'
+    },
+    {
+      number: '5552368',
+      file: 'ghostbusters.mp3',
+      name: 'Ghostbusters',
+      ref: 'Who ya gonna call? (1984)'
+    },
+    {
+      number: '5553535',
+      file: 'home-money.mp3',
+      name: 'Home Money',
+      ref: 'Home finance jingle'
+    },
+    {
+      number: '5558383',
+      file: 'seinfeld.mp3',
+      name: 'Seinfeld',
+      ref: 'Seinfeld theme'
+    },
+    {
+      number: '6138840',
+      file: 'god-of-war.mp3',
+      name: 'God of War (alt)',
+      ref: 'Kratos theme (alternate number)'
+    },
+    {
+      number: '6330171',
+      file: 'galochka.mp3',
+      name: 'Galochka',
+      ref: 'Ivan Vasilievich (Soviet comedy)'
+    },
+    {
+      number: '6647665',
+      file: 'scott-pilgrim.mp3',
+      name: 'Scott Pilgrim',
+      ref: 'Scott Pilgrim vs. the World'
+    },
+    {
+      number: '7334141',
+      file: 'if-you-are-homeless.mp3',
+      name: 'If You Are Homeless',
+      ref: 'Just buy a house meme'
+    },
+    {
+      number: '7861410',
+      file: 'black-meza.mp3',
+      name: 'Black Mesa',
+      ref: 'Half-Life — Black Mesa Research Facility'
+    },
+    {
+      number: '8600100',
+      file: '8600100.mp3',
+      name: '??? (8600100)',
+      ref: 'Unknown easter egg'
+    },
+    {
+      number: '8675309',
+      file: 'jenny.mp3',
+      name: 'Jenny (867-5309)',
+      ref: 'Tommy Tutone'
+    },
+    {
+      number: '8872061',
+      file: 'wazzap.mp3',
+      name: 'Wazzup!',
+      ref: 'Scary Movie / Budweiser ad'
+    },
+    {
+      number: '9211040',
+      file: 'camptain-pronin.mp3',
+      name: 'Captain Pronin',
+      ref: 'Russian cartoon superhero'
+    },
+    {
+      number: '9631963',
+      file: 'peppa-pig.mp3',
+      name: 'Peppa Pig',
+      ref: 'Peppa Pig theme'
+    }
   ]
 
   // Scan / event log
@@ -1450,23 +1632,16 @@
    */
   function isControllableSlot (s) {
     return (
-      s._options?.duration > 0 &&
-      !s._options.activateByEventName // skip event-triggered slots
+      s._options?.duration > 0 && !s._options.activateByEventName // skip event-triggered slots
     )
   }
 
-  // Prevent slot deletion ONLY for controllable (always-running) slots
-  // while we own frame control.  Event-triggered slots can still clean
-  // themselves up normally.
-  document.addEventListener(
-    'delete-slots-by-url-pattern',
-    e => {
-      if (animState.frozen) {
-        e.stopImmediatePropagation()
-      }
-    },
-    true
-  )
+  // NOTE: We intentionally do NOT intercept 'delete-slots-by-url-pattern'.
+  // Safe zone clamping keeps _internalFrameNo well within duration bounds,
+  // and the post-prepare re-pin prevents prepare() from deactivating slots.
+  // Blocking deletions was causing hologram movie switches to break during
+  // custom speed — the old slot stayed alive while a new one was added,
+  // producing duplicate/corrupt renders.
 
   /**
    * Compute a safe frame range for a duration-based render slot.
